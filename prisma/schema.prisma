@@ -1,0 +1,382 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+
+// ----------------------------------------------------------------------------
+// ENUMS
+// ----------------------------------------------------------------------------
+
+enum AuthProvider {
+  GOOGLE
+  APPLE
+}
+
+enum UserRole {
+  READER
+  CREATOR
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum ThemeMode {
+  LIGHT
+  DARK
+  SYSTEM
+}
+
+enum ProfileVisibility {
+  PUBLIC
+  FOLLOWERS_ONLY
+  PRIVATE
+}
+
+enum ContentType {
+  BOOK
+  COMIC
+}
+
+enum ContentStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum AgeRating {
+  ALL
+  TEEN
+  MATURE
+}
+
+enum ReadingMode {
+  PAGE
+  SCROLL
+}
+
+enum ReaderTheme {
+  LIGHT
+  DARK
+  SEPIA
+  NIGHT
+}
+
+enum DevicePlatform {
+  IOS
+  ANDROID
+  WEB
+}
+
+enum ContentFormat {
+  PLAIN
+  MARKDOWN
+  HTML
+  RICH_JSON
+}
+
+// ----------------------------------------------------------------------------
+// 1. AUTH & USER IDENTITY
+// Firebase owns credentials + issues ID/refresh tokens. This table is the
+// canonical "app user" that everything else foreign-keys to.
+// ----------------------------------------------------------------------------
+
+model User {
+  id            String       @id @default(cuid())
+  firebaseUid   String       @unique // maps 1:1 to Firebase Auth user
+  authProvider  AuthProvider
+  email         String?      @unique
+  phone         String?      @unique
+  username      String?      @unique
+  name          String?
+  avatarUrl     String?
+  coverPhotoUrl String?
+  bio           String?      @db.VarChar(300)
+
+  // --- Age verification / 12+ gate ---
+  birthDate     DateTime?
+  isAgeVerified Boolean      @default(false)
+  ageVerifiedAt DateTime?
+  isMinor       Boolean      @default(false) // derived from birthDate at verification time
+
+  role   UserRole   @default(READER)
+  status UserStatus @default(ACTIVE)
+
+  // --- Onboarding / navigation prefs ---
+  themeMode           ThemeMode @default(SYSTEM)
+  onboardingCompleted Boolean   @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Relations
+  socialLinks     SocialLink[]
+  interests       UserInterest[]
+  sessions        Session[]
+  privacySetting  PrivacySetting?
+  readerSettings  ReaderSettings?
+  followers       Follow[]          @relation("Following") // people who follow ME
+  following       Follow[]          @relation("Follower")  // people I follow
+  books           Book[]            @relation("AuthorBooks")
+  favorites       Favorite[]
+  readingProgress ReadingProgress[]
+
+  @@index([status])
+}
+
+// Session/device tracking for push notifications, "log out of all devices",
+// and last-active tracking. NOT a replacement for Firebase's token issuance —
+// this stores our own refresh-token hash (if we mint app-level tokens) and
+// device metadata alongside the Firebase-verified session.
+model Session {
+  id               String         @id @default(cuid())
+  userId           String
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId         String
+  platform         DevicePlatform
+  fcmToken         String? // push notification token
+  refreshTokenHash String? // if backend issues its own rotating refresh token
+  ipAddress        String?
+  userAgent        String?
+  lastActiveAt     DateTime       @default(now())
+  expiresAt        DateTime?
+  revokedAt        DateTime?
+  createdAt        DateTime       @default(now())
+
+  @@unique([userId, deviceId])
+  @@index([userId])
+}
+
+// ----------------------------------------------------------------------------
+// 2. ONBOARDING (interests) & 3. PROFILE / SOCIAL BASICS
+// ----------------------------------------------------------------------------
+
+model SocialLink {
+  id       String @id @default(cuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform String // "instagram" | "twitter" | "tiktok" | "website" ...
+  url      String
+  order    Int    @default(0)
+
+  @@index([userId])
+}
+
+model Interest {
+  id      String         @id @default(cuid())
+  name    String         @unique
+  slug    String         @unique
+  iconUrl String?
+  order   Int            @default(0)
+  users   UserInterest[]
+}
+
+model UserInterest {
+  userId     String
+  interestId String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  interest   Interest @relation(fields: [interestId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@id([userId, interestId])
+}
+
+model Follow {
+  id          String   @id @default(cuid())
+  followerId  String // the one doing the following
+  followingId String // the one being followed
+  follower    User     @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  following   User     @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([followerId, followingId])
+  @@index([followingId])
+}
+
+model PrivacySetting {
+  id                  String            @id @default(cuid())
+  userId              String            @unique
+  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profileVisibility   ProfileVisibility @default(PUBLIC)
+  showReadingActivity Boolean           @default(true)
+  showLibrary         Boolean           @default(true)
+  allowFollow         Boolean           @default(true)
+  updatedAt           DateTime          @updatedAt
+}
+
+// ----------------------------------------------------------------------------
+// 4. CONTENT DISCOVERY — Books / Comics, chapters, categories
+// ----------------------------------------------------------------------------
+
+model Category {
+  id    String         @id @default(cuid())
+  name  String         @unique
+  slug  String         @unique
+  iconUrl String?
+  order Int            @default(0)
+  books BookCategory[]
+}
+
+model Book {
+  id            String        @id @default(cuid())
+  slug          String        @unique // used for Universal Links / App Links routing
+  title         String
+  synopsis      String?       @db.Text
+  coverImageUrl String?
+  type          ContentType // BOOK | COMIC
+  status        ContentStatus @default(DRAFT)
+  ageRating     AgeRating     @default(ALL)
+  language      String        @default("en")
+  tags          String[]      @default([]) // lightweight tagging for search/filter
+
+  authorId String
+  author   User   @relation("AuthorBooks", fields: [authorId], references: [id])
+
+  viewCount     Int @default(0)
+  favoriteCount Int @default(0)
+  chapterCount  Int @default(0)
+
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  categories      BookCategory[]
+  chapters        Chapter[]
+  favorites       Favorite[]
+  readingProgress ReadingProgress[]
+
+  @@index([type, status])
+  @@index([authorId])
+}
+
+model BookCategory {
+  bookId     String
+  categoryId String
+  book       Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([bookId, categoryId])
+}
+
+// A Chapter/Episode holds shared metadata only. The actual content lives in
+// ONE of two child tables depending on Book.type:
+//   - Book.type == BOOK  -> ChapterText  (one row, Markdown/HTML/rich-JSON)
+//   - Book.type == COMIC -> ChapterPage  (many rows, one per image, ordered)
+// This is enforced at the API layer (see notes below), not by the DB schema.
+model Chapter {
+  id      String        @id @default(cuid())
+  bookId  String
+  book    Book          @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  title   String
+  order   Int // sequence within the book
+  status  ContentStatus @default(DRAFT)
+
+  viewCount   Int       @default(0)
+  releaseAt   DateTime? // scheduled publish time
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // exactly one of these should be populated, based on Book.type
+  text  ChapterText?
+  pages ChapterPage[]
+
+  readingProgress ReadingProgress[]
+
+  @@unique([bookId, order])
+  @@index([bookId, status])
+}
+
+// Novel/text content — one row per chapter.
+model ChapterText {
+  id                   String        @id @default(cuid())
+  chapterId            String        @unique
+  chapter              Chapter       @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  format               ContentFormat @default(MARKDOWN)
+  content              String        @db.Text // Markdown source / HTML / JSON-stringified rich doc
+  wordCount            Int           @default(0) // computed server-side on save
+  estimatedReadMinutes Int           @default(0) // computed server-side on save
+  updatedAt            DateTime      @updatedAt
+  createdAt            DateTime      @default(now())
+}
+
+// Comic content — one row per image page, ordered within the chapter.
+// Images live in object storage (S3/Cloud Storage/CDN); only the reference
+// and layout metadata are stored here.
+model ChapterPage {
+  id            String  @id @default(cuid())
+  chapterId     String
+  chapter       Chapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  order         Int
+  imageUrl      String
+  thumbnailUrl  String?
+  width         Int // used to reserve layout space before the image loads
+  height        Int
+  fileSizeBytes Int?
+  blurhash      String? // tiny placeholder string for instant low-res preview
+
+  @@unique([chapterId, order])
+}
+
+// ----------------------------------------------------------------------------
+// 5. READING EXPERIENCE — per-user reader preferences
+// ----------------------------------------------------------------------------
+
+model ReaderSettings {
+  id            String      @id @default(cuid())
+  userId        String      @unique
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  readingMode   ReadingMode @default(PAGE) // page-turn vs. scroll
+  readerTheme   ReaderTheme @default(LIGHT)
+  fontSize      Int         @default(16)
+  letterSpacing Float       @default(0)
+  updatedAt     DateTime    @updatedAt
+}
+
+// ----------------------------------------------------------------------------
+// 6. LIBRARY — favorites, drafts (via Book.status=DRAFT + authorId), progress
+// ----------------------------------------------------------------------------
+
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  bookId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book      Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, bookId])
+  @@index([bookId])
+}
+
+model ReadingProgress {
+  id              String   @id @default(cuid())
+  userId          String
+  bookId          String
+  chapterId       String?
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book            Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  chapter         Chapter? @relation(fields: [chapterId], references: [id], onDelete: SetNull)
+  progressPercent Float    @default(0) // 0-100, used for "Continue Reading"
+  lastPageIndex   Int? // for page-mode comics
+  scrollOffset    Float? // for scroll-mode reading
+  updatedAt       DateTime @updatedAt
+  createdAt       DateTime @default(now())
+
+  @@unique([userId, bookId])
+  @@index([userId, updatedAt])
+}
