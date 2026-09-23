@@ -96,3 +96,116 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 ## License
 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+
+## Authentication
+
+All routes require `Authorization: Bearer <Firebase ID token>` unless decorated
+with `@Public()`. The starter `GET /` route is public. Google and Apple sign-in
+happen on the client; this API does not issue or persist authentication tokens.
+
+Configuration (environment variables, also loaded from local `.env`):
+
+- `DATABASE_URL`: PostgreSQL connection URL.
+- `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY`:
+  Firebase service account fields. The private key accepts real newlines or literal `\n`.
+- Alternatively, `FIREBASE_SERVICE_ACCOUNT_BASE64`: base64-encoded Firebase service
+  account JSON (takes precedence over the individual fields).
+  Keep all credentials outside source control.
+
+### Prisma prerequisite
+
+This checkout did not include the existing Prisma schema described in the task.
+No schema or migrations have been added or changed. Restore the authoritative
+schema before building a fresh checkout. This implementation uses Prisma 7 and
+expects its generated client in `src/generated/prisma` with CommonJS output:
+
+```prisma
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+```
+
+The relative output above assumes the schema lives in `prisma/schema.prisma`.
+Run `npx prisma generate --schema prisma/schema.prisma` after restoring it. The
+client directory is ignored by Git. PostgreSQL connectivity uses `PrismaPg` and
+`DATABASE_URL`; deployment must provision the existing schema separately.
+
+### Endpoints
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| GET | `/interests` | Public; all interest options sorted by `order`, then `name` |
+| POST | `/users/me/interests` | Firebase; `{ "interestIds": ["..."] }`; bulk adds selections, ignores duplicates, retains existing selections; returns all selected interest options (201) |
+| GET | `/users/me/interests` | Firebase; current user's selected interest options in display order |
+| PATCH | `/users/me/theme` | Firebase; `{ "themeMode": "LIGHT\|DARK\|SYSTEM" }`; returns `{ "themeMode": "..." }` |
+| GET | `/auth/me` | Own profile, excluding Firebase UID and internal account fields |
+| POST | `/auth/verify-age` | `{ "birthDate": "YYYY-MM-DD" }`; UTC calendar age, minimum 12 |
+| POST | `/auth/sessions` | `{ "deviceId": "...", "platform": "IOS\|ANDROID\|WEB", "fcmToken": "..." }`; FCM token optional |
+| DELETE | `/auth/sessions/:deviceId` | Revoke the authenticated user's device registration; idempotent 204 |
+| POST | `/auth/logout-all` | Revoke Firebase refresh tokens and all local device registrations; 204 |
+
+Session registration reactivates an existing device and refreshes its activity
+time. Device revocation records local state; it does not revoke a Firebase ID
+token for that device. Logout-all checks Firebase revocation on later requests
+using `verifyIdToken(token, true)`, as documented in the
+[Firebase Admin reference](https://firebase.google.com/docs/reference/admin/node/firebase-admin.auth.baseauth).
+
+Use `@CurrentUser()` for the local Prisma user. `@Roles(UserRole.CREATOR,
+UserRole.ADMIN)` restricts routes after authentication. Apply
+`@UseGuards(AgeVerifiedGuard)` to routes requiring completed age verification.
+That guard checks verification only; enforce any additional adult-only content
+policy separately using `isMinor`. Service methods can call
+`assertOwnerOrAdmin(user, resource)` after loading a resource with `authorId`.
+
+First login creates the local profile; later logins preserve local profile
+fields. Only verified Firebase email claims are copied. Suspended, deleted,
+and soft-deleted users are denied. Client-facing error codes include
+`INVALID_TOKEN`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `ACCOUNT_SUSPENDED`,
+`ACCOUNT_DELETED`, `AGE_VERIFICATION_REQUIRED`, and `AGE_REQUIREMENT_NOT_MET`.
+
+### Authentication tests
+
+```bash
+npm run build
+npm test -- --runInBand --watchman=false
+npm run test:e2e -- --runInBand --watchman=false
+npm run lint
+```
+
+Unit and HTTP e2e tests mock Firebase and Prisma; they need no credentials or
+running database. They do not verify live Firebase or PostgreSQL connectivity.
+
+## Interactive API documentation
+
+Install dependencies with `npm install`, configure `.env` as described above,
+then start the API with `npm run start:dev`.
+
+With the default port (`3000`):
+
+- Swagger UI: http://localhost:3000/docs
+- Scalar API reference: http://localhost:3000/reference
+- OpenAPI JSON: http://localhost:3000/openapi.json
+- OpenAPI YAML: http://localhost:3000/openapi.yaml
+
+Both interfaces use the same generated OpenAPI document. Documentation routes
+are public. Scalar loads its browser UI from the default jsDelivr CDN, so the
+browser needs internet access. Replace port `3000` when setting `PORT`.
+
+To try authenticated endpoints, sign in with Firebase on the client and copy
+its **ID token**. In Swagger, click **Authorize** and paste the token; in Scalar,
+enter it in the Bearer authentication field. Enter only the token, without the
+`Bearer ` prefix. Requests to `/auth/*` require it; `GET /` is public.
+
+Configuration lives in `src/docs/setup-api-docs.ts`. Add Swagger decorators to
+new controllers and DTOs to keep summaries, request schemas, response schemas,
+and authentication requirements current. Never include real credentials in
+examples.
+
+Integration references: [NestJS Swagger](https://docs.nestjs.com/openapi/introduction)
+and [Scalar for NestJS](https://scalar.com/products/api-references/integrations/nestjs).
+
+Interest saves reject unknown IDs with 400 before inserting any selections. An empty
+array leaves selections unchanged. Preference requests reject unexpected fields;
+these endpoints do not require age verification. `/auth/me` includes `themeMode`.
