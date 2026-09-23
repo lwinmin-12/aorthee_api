@@ -9,6 +9,7 @@ import { Reflector } from '@nestjs/core';
 import { FirebaseAdminService } from '../../firebase-admin/firebase-admin.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { IS_PUBLIC } from '../decorators/public.decorator';
+import { OPTIONAL_AUTH } from '../decorators/optional-auth.decorator';
 import type { AuthenticatedRequest } from '../authenticated-request';
 
 @Injectable()
@@ -29,6 +30,14 @@ export class FirebaseAuthGuard implements CanActivate {
       return true;
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const header = request.headers.authorization;
+    if (
+      header === undefined &&
+      this.reflector.getAllAndOverride<boolean>(OPTIONAL_AUTH, [
+        context.getHandler(),
+        context.getClass(),
+      ])
+    )
+      return true;
     const match =
       typeof header === 'string' ? /^Bearer ([^\s]+)$/i.exec(header) : null;
     if (!match)

@@ -209,3 +209,103 @@ and [Scalar for NestJS](https://scalar.com/products/api-references/integrations/
 Interest saves reject unknown IDs with 400 before inserting any selections. An empty
 array leaves selections unchanged. Preference requests reject unexpected fields;
 these endpoints do not require age verification. `/auth/me` includes `themeMode`.
+
+### Users and profiles
+
+| Method | Path | Authentication | Request / response |
+| --- | --- | --- | --- |
+| GET | `/users/:id` | Optional Firebase | Public profile fields: `id`, `username`, `name`, `avatarUrl`, `coverPhotoUrl`, `bio` |
+| GET | `/users/username/:username` | Public / optional Firebase | Same profile, looked up by exact username |
+| PATCH | `/users/me` | Firebase | Optional `name`, `avatarUrl`, `bio`, `username`; returns own profile |
+| PATCH | `/users/me/cover-photo` | Firebase | Required `coverPhotoUrl`; returns own profile |
+| POST | `/users/me/social-links` | Firebase | Required `platform`, `url`; optional `order` (default 0); returns social link (201) |
+| PATCH | `/users/me/social-links/:id` | Firebase | Optional `platform`, `url`, `order`; returns updated social link |
+| DELETE | `/users/me/social-links/:id` | Firebase | Deletes own link (204); missing or unowned link returns 404 |
+| GET | `/users/:id/social-links` | Public / optional Firebase | Social links ordered by `order`, then `id` |
+| POST | `/users/:id/follow` | Firebase | Returns new or existing `Follow` row (201) |
+| DELETE | `/users/:id/follow` | Firebase | Idempotent unfollow (204), including when the target no longer allows follows |
+| GET | `/users/:id/followers` | Public / optional Firebase | Array of visible follower profiles |
+| GET | `/users/:id/following` | Public / optional Firebase | Array of visible profiles the user follows |
+| GET | `/users/me/privacy-settings` | Firebase | Gets `PrivacySetting`, creating schema defaults if absent |
+| PATCH | `/users/me/privacy-settings` | Firebase | Optional `profileVisibility`, `showReadingActivity`, `showLibrary`, `allowFollow`; returns settings |
+
+Public reads enforce `profileVisibility`. `PUBLIC` (also the default when no
+settings row exists) permits anonymous reads; `FOLLOWERS_ONLY` permits the owner
+and authenticated followers; `PRIVATE` permits only the owner. Missing, inactive,
+and invisible profiles return 404. Social-link and connection lists enforce the
+same rule; connection lists also exclude members whose profiles the viewer cannot
+see. Optional authentication verifies any supplied token; invalid credentials
+return 401. Public responses never include email, phone, Firebase identity, birth
+date, or private settings.
+
+Follower/following lists accept `?limit=20&offset=0` (`limit`: 1–100, `offset`:
+nonnegative integer), sort by user ID, and return arrays. Self-follow returns 400;
+`allowFollow: false` prevents new follow requests with 403. Changing that setting
+does not remove existing follows. Following is immediate; there is no follow
+approval workflow in the current schema.
+
+Profile fields and `coverPhotoUrl` accept `null` to clear them. Usernames are
+case-sensitive, unique, and contain 3–30 ASCII letters, digits, or underscores;
+conflicts return 409. Names are limited to 100 characters, bios to 300, platforms
+to 50, and URLs to 2048. URLs must use HTTP or HTTPS. Social-link order is a
+nonnegative 32-bit integer. Privacy visibility is `PUBLIC`, `FOLLOWERS_ONLY`, or
+`PRIVATE`; its other fields require booleans. Unexpected body fields are rejected.
+`showLibrary` and `showReadingActivity` are stored for future library/activity
+endpoints; this module does not expose those resources.
+
+The user endpoint HTTP tests mock Firebase and Prisma and cover authentication,
+visibility query filters, ownership, validation, pagination, and error responses.
+They do not exercise a live database or Firebase project.
+
+### Books and comics
+
+| Method | Path | Authentication | Behavior |
+| --- | --- | --- | --- |
+| GET | `/books` | Public | Array of published books/comics; `limit` (default 20, max 100), `offset` (default 0), optional `type=BOOK` or `type=COMIC` |
+| GET | `/books/:slug` | Public | Published book/comic metadata by slug; 404 for missing, draft, or archived books |
+| POST | `/books` | Firebase, CREATOR | Creates a draft owned by the caller; returns book (201) |
+| PATCH | `/books/:id` | Firebase, owner or ADMIN | Edits metadata; returns updated book (200) |
+| POST | `/books/:id/publish` | Firebase, owner or ADMIN | Sets `status=PUBLISHED`, `publishedAt=now()`; returns book (200) |
+| DELETE | `/books/:id` | Firebase, owner or ADMIN | Sets `status=ARCHIVED`; no response body (204) |
+
+Create a draft with:
+
+```json
+{
+  "slug": "the-last-library",
+  "title": "The Last Library",
+  "type": "BOOK",
+  "synopsis": "A reader discovers a forgotten world.",
+  "coverImageUrl": "https://example.com/cover.jpg",
+  "ageRating": "ALL",
+  "language": "en",
+  "tags": ["fantasy"]
+}
+```
+
+`slug`, `title`, and `type` are required. Optional fields default to the schema's
+values (`ageRating=ALL`, `language=en`, `tags=[]`). Slugs use lowercase letters,
+digits, and single hyphens between segments (maximum 200 characters); duplicate
+slugs return 409. Titles must contain non-whitespace text and are limited to 200
+characters. Synopses are limited to 10,000 characters; cover URLs must use HTTP or
+HTTPS and are limited to 2048 characters. `ageRating` accepts `ALL`, `TEEN`, or
+`MATURE`. Language accepts a 2–8 letter language code with optional hyphenated
+subtags (maximum 35 characters). Tags are limited to 20 unique, nonblank strings
+of at most 50 characters each.
+
+PATCH accepts any subset of those fields except `type`, which stays fixed to
+preserve chapter content compatibility. `synopsis` and `coverImageUrl` accept
+`null` to clear them. Clients cannot set author identity, status, publication
+timestamps, or counters through metadata requests. Creation requires the CREATOR
+role specifically; ownership or ADMIN grants permission for subsequent writes.
+
+Public results include book metadata and counters, with no chapter content or
+private author fields. They exclude books belonging to suspended, deleted, or
+soft-deleted authors. Browse results sort by publication time descending, then ID
+ascending for stable pagination. The public endpoints do not expose drafts even
+when called by their owner.
+
+Publishing also supports archived books and resets `publishedAt` on each call.
+Archiving preserves the book, its publication timestamp, chapters, favorites, and
+reading progress; repeated archiving succeeds. Missing books return 404 and
+unauthorized ownership attempts return 403. No database migration is required.
