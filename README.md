@@ -309,3 +309,126 @@ Publishing also supports archived books and resets `publishedAt` on each call.
 Archiving preserves the book, its publication timestamp, chapters, favorites, and
 reading progress; repeated archiving succeeds. Missing books return 404 and
 unauthorized ownership attempts return 403. No database migration is required.
+
+### Search, filters, and categories
+
+- `GET /search?q=magic%20library&limit=20&offset=0` performs PostgreSQL full-text
+  search across book titles and tags. Results are book metadata arrays, ranked by
+  relevance (titles weighted above tags), then publication time and ID. The `q`
+  parameter is required, trimmed, limited to 200 characters, and must contain a
+  letter or number. Search uses PostgreSQL's `simple` configuration: case-insensitive
+  token matching without language-specific stemming. Quoted phrases, `OR`, and
+  minus-prefixed exclusions use `websearch_to_tsquery` syntax. Input is bound as
+  SQL parameters. This is word-based search, not substring autocomplete.
+- `GET /books?category=fantasy&tags=magic,adventure&ageRating=TEEN&language=en`
+  combines all supplied filters with the existing `type`, `limit`, and `offset`
+  options. `category` accepts a category ID or slug. Tags match any listed tag
+  exactly and case-sensitively; up to 20 unique tags are allowed. `ageRating` is an
+  exact `ALL`, `TEEN`, or `MATURE` match. Language is an exact, case-insensitive
+  code match. Unknown categories produce an empty listing.
+- `GET /categories` publicly lists all categories by display order.
+- `POST /categories` requires Firebase authentication and the ADMIN role.
+  Supply `{ "name": "Fantasy", "slug": "fantasy" }`; slug is optional and generated
+  from the name when omitted. `iconUrl` and nonnegative `order` are optional.
+  Duplicate names/slugs return 409.
+- `POST /books/:id/categories` requires book ownership and accepts
+  `{ "categoryIds": ["category-1", "category-2"] }`. The existing single-category
+  body `{ "categoryId": "category-1" }` also works; supply exactly one form.
+  Bulk requests accept 1–100 unique IDs. All categories are checked before any
+  assignments are written in a transaction. Missing categories return 404;
+  existing assignments are ignored and retained. Success returns
+  `{ "success": true }` with 201.
+- `DELETE /books/:id/categories/:categoryId` requires book ownership, removes
+  that assignment, and returns `{ "success": true }` with 200. Missing books or
+  assignments return 404. ADMIN does not bypass ownership for either assignment
+  endpoint.
+- `GET /categories/:slug/books` remains public and returns
+  `{ "category": {...}, "items": [...], "page": 1, "limit": 10, "total": 0,
+  "totalPages": 0 }`. It accepts `page`, `limit` (1–100), `type`, `tags`,
+  `ageRating`, and `language`. Missing category slugs return 404.
+
+Search, general browsing, and category browsing exclude drafts, archived books,
+and books by inactive or soft-deleted authors. Search and `/books` use limit/offset
+pagination (default limit 20, maximum 100). Swagger documents these parameters,
+request bodies, and responses. No schema migration is needed. HTTP tests mock
+Prisma and Firebase; they check filters, SQL parameter binding, validation, and
+permissions without testing full-text matching against a live PostgreSQL server.
+
+### Reader settings
+
+Both routes require a Firebase ID token and an active account:
+
+- `GET /users/me/reader-settings` returns the current user's `ReaderSettings`,
+  creating schema defaults when absent: `readingMode=PAGE`, `readerTheme=LIGHT`,
+  `fontSize=16`, `letterSpacing=0`.
+- `PATCH /users/me/reader-settings` accepts any subset of `readingMode`
+  (`PAGE` or `SCROLL`), `readerTheme` (`LIGHT`, `DARK`, `SEPIA`, `NIGHT`),
+  `fontSize` (integer 8–72), and `letterSpacing` (number 0–10, decimals allowed).
+  Omitted fields retain their values; when creating settings, omitted fields use
+  the schema defaults. An empty object preserves existing values. Null values,
+  numeric strings, and unexpected fields are rejected with 400.
+
+Example PATCH body:
+
+```json
+{
+  "readingMode": "SCROLL",
+  "readerTheme": "SEPIA",
+  "fontSize": 20,
+  "letterSpacing": 0.5
+}
+```
+
+Both routes return 200 with `id`, `userId`, the four settings fields, and
+`updatedAt`. The user ID comes from the verified identity, not the request body.
+Reader theme is separate from the application-level `themeMode`. Swagger includes
+request and response schemas. No database migration is needed.
+
+### Library and reading progress
+
+All library routes require Firebase authentication and an active account. No
+creator role or completed age verification is required.
+
+| Method | Route | Behavior |
+| --- | --- | --- |
+| POST | `/books/:id/favorite` | Creates or returns the caller's `Favorite` (201); requires a published book by an active author |
+| DELETE | `/books/:id/favorite` | Removes the caller's favorite (204); succeeds if absent, including when a book is archived or missing |
+| GET | `/users/me/favorites` | Array of available favorited book metadata, newest favorite first |
+| GET | `/users/me/drafts` | Array of own DRAFT books, newest update first |
+| GET | `/users/me/continue-reading` | Array of progress records including `book` metadata, sorted by `updatedAt` descending |
+| PUT | `/reading-progress` | Creates or updates one progress record per user/book (200) |
+| GET | `/reading-progress/:bookId` | Returns the caller's saved progress, or 404 if absent or unavailable |
+
+The three list routes accept `limit` (default 20, range 1–100) and `offset`
+(default 0). Continue Reading includes only `0 < progressPercent < 100`;
+completed and not-started records remain available through the per-book progress
+route. Favorites and progress listings hide unpublished/archived books, inactive
+authors, and progress pointing to unpublished chapters. Own drafts are separate.
+Favorite changes and `Book.favoriteCount` updates happen in one transaction;
+repeated requests do not increment or decrement the count twice.
+
+Example progress request:
+
+```json
+{
+  "bookId": "book-1",
+  "chapterId": "chapter-1",
+  "progressPercent": 25.5,
+  "lastPageIndex": 2,
+  "scrollOffset": 150.5
+}
+```
+
+`bookId` and numeric `progressPercent` (0–100) are required. The book must be
+published with an active author. If supplied, `chapterId` must refer to a published
+chapter in that book. `lastPageIndex` is a nonnegative, zero-based 32-bit integer;
+`scrollOffset` is a finite nonnegative number. Both are optional resume positions.
+Omitted fields retain existing values. Changing or clearing the chapter resets
+omitted page/scroll positions to null; explicit null clears any optional field.
+A retained chapter is revalidated on updates. These endpoints do not infer
+progress from chapter counts or positions. User identity always comes from the
+Firebase guard; client-supplied `userId` and unknown fields are rejected.
+
+Progress responses contain `id`, `userId`, `bookId`, `chapterId`,
+`progressPercent`, `lastPageIndex`, `scrollOffset`, `updatedAt`, and `createdAt`.
+Swagger documents all request and response schemas. No migration is needed.

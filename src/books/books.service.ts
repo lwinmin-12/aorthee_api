@@ -8,6 +8,7 @@ import type { User } from '../../generated/prisma/client';
 import { assertOwnerOrAdmin } from '../auth/assert-owner-or-admin';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBookDto, ListBooksDto, UpdateBookDto } from './dto/book.dto';
+import { publicBookFilters, publishedBooks } from './book-query';
 
 const bookSelect = {
   id: true,
@@ -29,18 +30,13 @@ const bookSelect = {
   updatedAt: true,
 } satisfies Prisma.BookSelect;
 
-const publishedBooks = {
-  status: 'PUBLISHED',
-  author: { status: 'ACTIVE', deletedAt: null },
-} satisfies Prisma.BookWhereInput;
-
 @Injectable()
 export class BooksService {
   constructor(private readonly prisma: PrismaService) {}
 
   list(query: ListBooksDto) {
     return this.prisma.book.findMany({
-      where: { ...publishedBooks, ...(query.type ? { type: query.type } : {}) },
+      where: publicBookFilters(query),
       select: bookSelect,
       orderBy: [{ publishedAt: 'desc' }, { id: 'asc' }],
       take: query.limit,

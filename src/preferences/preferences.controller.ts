@@ -14,6 +14,10 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 import { InterestDto, SaveInterestsDto, ThemeDto } from './dto/preferences.dto';
 import { PreferencesService } from './preferences.service';
+import {
+  ReaderSettingsResponseDto,
+  UpdateReaderSettingsDto,
+} from './dto/reader-settings.dto';
 
 @ApiTags('Interests')
 @Controller('interests')
@@ -38,6 +42,35 @@ export class InterestsController {
 @Controller('users/me')
 export class UserPreferencesController {
   constructor(private readonly preferences: PreferencesService) {}
+
+  @Get('reader-settings')
+  @ApiOperation({
+    summary: 'Get your reader settings',
+    description:
+      'Creates defaults if absent: PAGE, LIGHT, fontSize 16, letterSpacing 0.',
+  })
+  @ApiOkResponse({ type: ReaderSettingsResponseDto })
+  getReaderSettings(@CurrentUser() user: User) {
+    return this.preferences.getReaderSettings(user.id);
+  }
+
+  @Patch('reader-settings')
+  @ApiOperation({
+    summary: 'Update your reader settings',
+    description:
+      'Updates only supplied fields. Creates settings with schema defaults for omitted fields when absent. An empty object preserves existing values.',
+  })
+  @ApiOkResponse({ type: ReaderSettingsResponseDto })
+  @ApiBadRequestResponse({
+    description:
+      'Invalid mode, theme, font size (integer 8–72), letter spacing (0–10), null, or unexpected fields.',
+  })
+  updateReaderSettings(
+    @CurrentUser() user: User,
+    @Body() dto: UpdateReaderSettingsDto,
+  ) {
+    return this.preferences.updateReaderSettings(user.id, dto);
+  }
 
   @Post('interests')
   @ApiOperation({

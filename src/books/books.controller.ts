@@ -38,7 +38,11 @@ export class BooksController {
 
   @Public()
   @Get()
-  @ApiOperation({ summary: 'Browse published books and comics' })
+  @ApiOperation({
+    summary: 'Browse published books and comics',
+    description:
+      'Combine type, category (ID or slug), tags (comma-separated, any match), ageRating, and language filters. Supports limit/offset pagination.',
+  })
   @ApiOkResponse({ type: [BookResponseDto] })
   @ApiBadRequestResponse({ description: 'Invalid pagination or content type.' })
   list(@Query() query: ListBooksDto) {

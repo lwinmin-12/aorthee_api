@@ -20,6 +20,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { AgeRating, ContentType } from '../../../generated/prisma/enums';
+import { BookFiltersDto } from './book-filters.dto';
 
 export class CreateBookDto {
   @ApiProperty({ example: 'the-last-library', maxLength: 200 })
@@ -87,7 +88,7 @@ export class UpdateBookDto extends PartialType(
   { skipNullProperties: false },
 ) {}
 
-export class ListBooksDto {
+export class ListBooksDto extends BookFiltersDto {
   @ApiPropertyOptional({ default: 20, minimum: 1, maximum: 100 })
   @Type(() => Number)
   @IsInt()
@@ -101,9 +102,4 @@ export class ListBooksDto {
   @Min(0)
   @Max(2147483647)
   offset: number = 0;
-
-  @ApiPropertyOptional({ enum: ContentType, enumName: 'ContentType' })
-  @ValidateIf((_object, value: unknown) => value !== undefined)
-  @IsEnum(ContentType)
-  type?: ContentType;
 }

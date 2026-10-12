@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma, ThemeMode } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { UpdateReaderSettingsDto } from './dto/reader-settings.dto';
 
 const interestSelect = {
   id: true,
@@ -17,6 +18,22 @@ const interestOrder = [
 @Injectable()
 export class PreferencesService {
   constructor(private readonly prisma: PrismaService) {}
+
+  getReaderSettings(userId: string) {
+    return this.prisma.readerSettings.upsert({
+      where: { userId },
+      create: { userId },
+      update: {},
+    });
+  }
+
+  updateReaderSettings(userId: string, dto: UpdateReaderSettingsDto) {
+    return this.prisma.readerSettings.upsert({
+      where: { userId },
+      create: { ...dto, userId },
+      update: dto,
+    });
+  }
 
   listInterests() {
     return this.prisma.interest.findMany({

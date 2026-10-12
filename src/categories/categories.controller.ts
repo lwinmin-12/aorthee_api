@@ -1,4 +1,8 @@
 import {
+  CategoryResponseDto,
+  CategoryBooksResponseDto,
+} from './dto/category-response.dto';
+import {
   Body,
   Controller,
   Delete,
@@ -12,6 +16,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
+  ApiConflictResponse,
   ApiBearerAuth,
   ApiCreatedResponse,
   ApiForbiddenResponse,
@@ -48,6 +53,7 @@ export class CategoriesController {
   })
   @ApiOkResponse({
     description: 'Categories retrieved successfully.',
+    type: [CategoryResponseDto],
   })
   findAll() {
     return this.categoriesService.findAll();
@@ -62,6 +68,7 @@ export class CategoriesController {
   })
   @ApiOkResponse({
     description: 'Category retrieved successfully.',
+    type: CategoryResponseDto,
   })
   @ApiNotFoundResponse({
     description: 'Category with the specified slug was not found.',
@@ -81,15 +88,19 @@ export class CategoriesController {
   })
   @ApiCreatedResponse({
     description: 'Category created successfully.',
+    type: CategoryResponseDto,
   })
   @ApiBadRequestResponse({
-    description: 'Invalid category data or slug/name already exists.',
+    description: 'Invalid category data.',
   })
   @ApiUnauthorizedResponse({
     description: 'Missing or invalid authentication token.',
   })
   @ApiForbiddenResponse({
     description: 'User does not have ADMIN role.',
+  })
+  @ApiConflictResponse({
+    description: 'A category with this slug already exists.',
   })
   create(@Body() dto: CreateCategoryDto) {
     return this.categoriesService.create(dto);
@@ -106,9 +117,10 @@ export class CategoriesController {
   })
   @ApiOkResponse({
     description: 'Category updated successfully.',
+    type: CategoryResponseDto,
   })
   @ApiBadRequestResponse({
-    description: 'Invalid category data or slug/name already exists.',
+    description: 'Invalid category data.',
   })
   @ApiUnauthorizedResponse({
     description: 'Missing or invalid authentication token.',
@@ -151,6 +163,14 @@ export class CategoriesController {
 
   @Public()
   @Get(':slug/books')
+  @ApiOperation({
+    summary: 'Browse published books in a category',
+    description:
+      'Supports page/limit pagination plus type, tags, ageRating, and language filters. Only published books by active authors are returned.',
+  })
+  @ApiOkResponse({ type: CategoryBooksResponseDto })
+  @ApiBadRequestResponse({ description: 'Invalid pagination or content type.' })
+  @ApiNotFoundResponse({ description: 'Category not found.' })
   findBooks(@Param('slug') slug: string, @Query() query: ListCategoryBooksDto) {
     return this.categoriesService.findBooksForCategory(slug, query);
   }
